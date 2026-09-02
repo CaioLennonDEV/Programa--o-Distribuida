@@ -1,0 +1,113 @@
+﻿<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="AgroSense Mesh – Dashboard de monitoramento distribuído de telemetria agrícola em tempo real." />
+  <title>AgroSense Mesh · Dashboard</title>
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body>
+
+  <!-- ── Header ──────────────────────────────────────────────────────── -->
+  <header>
+    <div class="logo-icon" aria-hidden="true">🌿</div>
+    <div class="logo-text">
+      <h1>AgroSense Mesh</h1>
+      <p>Sistema Distribuído de Telemetria Agrícola · Tempo Real</p>
+    </div>
+    <div class="header-status">
+      <div class="dot" id="ws-dot"></div>
+      <span id="ws-label">Desconectado</span>
+    </div>
+  </header>
+
+  <!-- ── Main Layout ─────────────────────────────────────────────────── -->
+  <main>
+
+    <!-- ── Workers ──────────────────────────────────────────────────── -->
+    <section class="workers-section" aria-label="Status dos Workers">
+      <div class="section-title" style="grid-column:1/-1">🖥️ Nós Workers (Competing Consumers)</div>
+
+      <div class="worker-card" id="worker-card-1">
+        <div class="worker-header">
+          <span class="worker-node-id">worker-1</span>
+          <span class="crown-icon" id="crown-1" style="display:none">👑</span>
+          <span class="status-badge active" id="badge-1">AGUARDANDO</span>
+        </div>
+        <div class="worker-metrics">
+          <div class="metric">
+            <div class="metric-label">Status</div>
+            <div class="metric-value" id="status-text-1">—</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">Relógio de Lamport</div>
+            <div class="metric-value" id="lamport-1">0</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="worker-card" id="worker-card-2">
+        <div class="worker-header">
+          <span class="worker-node-id">worker-2</span>
+          <span class="crown-icon" id="crown-2" style="display:none">👑</span>
+          <span class="status-badge active" id="badge-2">AGUARDANDO</span>
+        </div>
+        <div class="worker-metrics">
+          <div class="metric">
+            <div class="metric-label">Status</div>
+            <div class="metric-value" id="status-text-2">—</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">Relógio de Lamport</div>
+            <div class="metric-value" id="lamport-2">0</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="worker-card" id="worker-card-3">
+        <div class="worker-header">
+          <span class="worker-node-id">worker-3</span>
+          <span class="crown-icon" id="crown-3" style="display:none">👑</span>
+          <span class="status-badge active" id="badge-3">AGUARDANDO</span>
+        </div>
+        <div class="worker-metrics">
+          <div class="metric">
+            <div class="metric-label">Status</div>
+            <div class="metric-value" id="status-text-3">—</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">Relógio de Lamport</div>
+            <div class="metric-value" id="lamport-3">0</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Lamport Log ───────────────────────────────────────────────── -->
+    <section class="lamport-section" aria-label="Logs do Relógio de Lamport">
+      <div class="section-title">⏱️ Eventos de Relógio de Lamport</div>
+      <div class="log-terminal" id="lamport-terminal">
+        <div class="log-entry">
+          <span class="ts">[sistema]</span>
+          <span class="event"> Aguardando eventos de relógio...</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Irrigation Log ────────────────────────────────────────────── -->
+    <section class="irrigation-section" aria-label="Histórico de Ativações de Irrigação">
+      <div class="section-title">💧 Histórico de Ativação de Irrigação (Líder)</div>
+      <div id="irrigation-container">
+        <div class="empty-state">
+          <span class="icon">🌱</span>
+          Aguardando dados do banco...
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <script src="/js/app.js"></script>
+</body>
+</html>

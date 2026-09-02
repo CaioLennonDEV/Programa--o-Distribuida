@@ -1,0 +1,35 @@
+﻿syntax = "proto3";
+
+package agrosense;
+
+service AgroTelemetryService {
+  rpc SendTelemetry (TelemetryPacket) returns (TelemetryAck);
+  rpc WatchWorkerStatus (WatchRequest) returns (stream WorkerStatusEvent);
+}
+
+message TelemetryPacket {
+  string sensor_id      = 1;
+  string zone           = 2;
+  float  moisture       = 3;
+  float  temperature    = 4;
+  int64  timestamp      = 5;
+  int64  lamport_clock  = 6;
+}
+
+message TelemetryAck {
+  bool   queued          = 1;
+  string message_id      = 2;
+  int64  gateway_lamport = 3;
+  string info            = 4;
+}
+
+message WatchRequest {
+  string client_id = 1;
+}
+
+message WorkerStatusEvent {
+  string node_id      = 1;
+  string status       = 2;
+  int64  lamport_time = 3;
+  int64  event_ts     = 4;
+}

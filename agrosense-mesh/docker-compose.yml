@@ -1,0 +1,226 @@
+﻿# ═══════════════════════════════════════════════════════════════════════════
+#  AgroSense Mesh – docker-compose.yml
+#  Topologia: RabbitMQ | Gateway | 3x Workers | PG Primary+Replica | Web
+# ═══════════════════════════════════════════════════════════════════════════
+version: "3.9"
+
+# ─── Volumes Persistentes ───────────────────────────────────────────────────
+volumes:
+  rabbitmq_data:
+  postgres_primary_data:
+  postgres_replica_data:
+
+# ─── Redes Internas ────────────────────────────────────────────────────────
+networks:
+  mesh_net:
+    driver: bridge
+  election_net:
+    driver: bridge
+
+# ─── Serviços ──────────────────────────────────────────────────────────────
+services:
+
+  # ── 1. RabbitMQ ────────────────────────────────────────────────────────
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: agrosense-rabbitmq
+    hostname: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    ports:
+      - "5672:5672"    # AMQP
+      - "15672:15672"  # Management UI
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - mesh_net
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ── 2. PostgreSQL Primary ───────────────────────────────────────────────
+  postgres-primary:
+    image: postgres:16-alpine
+    container_name: agrosense-pg-primary
+    environment:
+      POSTGRES_DB:       agrosense
+      POSTGRES_USER:     agro
+      POSTGRES_PASSWORD: agro123
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_primary_data:/var/lib/postgresql/data
+      - ./infra/pg-init.sql:/docker-entrypoint-initdb.d/01-init.sql
+    networks:
+      - mesh_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agro -d agrosense"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ── 3. PostgreSQL Replica (streaming replica simples via pgpool ou standby)
+  #     Aqui usamos uma instância independente como "replica de leitura"
+  #     para o dashboard web (cenário educacional simplificado).
+  postgres-replica:
+    image: postgres:16-alpine
+    container_name: agrosense-pg-replica
+    environment:
+      POSTGRES_DB:       agrosense
+      POSTGRES_USER:     agro
+      POSTGRES_PASSWORD: agro123
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_replica_data:/var/lib/postgresql/data
+      - ./infra/pg-init.sql:/docker-entrypoint-initdb.d/01-init.sql
+    networks:
+      - mesh_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agro -d agrosense"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ── 4. Gateway gRPC ─────────────────────────────────────────────────────
+  gateway:
+    build:
+      context: .
+      dockerfile: server/gateway/Dockerfile
+    container_name: agrosense-gateway
+    environment:
+      GRPC_PORT:    "50051"
+      RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672"
+    ports:
+      - "50051:50051"
+    networks:
+      - mesh_net
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── 5. Worker Node 1 ────────────────────────────────────────────────────
+  worker-1:
+    build:
+      context: ./server/worker
+      dockerfile: Dockerfile
+    container_name: agrosense-worker-1
+    environment:
+      NODE_ID:      "1"
+      ALL_NODES:    "1,2,3"
+      RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672"
+      DB_HOST:      "postgres-primary"
+      DB_PORT:      "5432"
+      DB_NAME:      "agrosense"
+      DB_USER:      "agro"
+      DB_PASSWORD:  "agro123"
+      WEB_URL:      "http://web:3000"
+    ports:
+      - "9001:9001"  # Porta de eleição TCP
+    networks:
+      - mesh_net
+      - election_net
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres-primary:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── 6. Worker Node 2 ────────────────────────────────────────────────────
+  worker-2:
+    build:
+      context: ./server/worker
+      dockerfile: Dockerfile
+    container_name: agrosense-worker-2
+    environment:
+      NODE_ID:      "2"
+      ALL_NODES:    "1,2,3"
+      RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672"
+      DB_HOST:      "postgres-primary"
+      DB_PORT:      "5432"
+      DB_NAME:      "agrosense"
+      DB_USER:      "agro"
+      DB_PASSWORD:  "agro123"
+      WEB_URL:      "http://web:3000"
+    ports:
+      - "9002:9002"  # Porta de eleição TCP
+    networks:
+      - mesh_net
+      - election_net
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres-primary:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── 7. Worker Node 3 ────────────────────────────────────────────────────
+  worker-3:
+    build:
+      context: ./server/worker
+      dockerfile: Dockerfile
+    container_name: agrosense-worker-3
+    environment:
+      NODE_ID:      "3"
+      ALL_NODES:    "1,2,3"
+      RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672"
+      DB_HOST:      "postgres-primary"
+      DB_PORT:      "5432"
+      DB_NAME:      "agrosense"
+      DB_USER:      "agro"
+      DB_PASSWORD:  "agro123"
+      WEB_URL:      "http://web:3000"
+    ports:
+      - "9003:9003"  # Porta de eleição TCP
+    networks:
+      - mesh_net
+      - election_net
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres-primary:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── 8. Simulador de Sensores (Client) ────────────────────────────────────
+  sensor-simulator:
+    build:
+      context: .
+      dockerfile: client/Dockerfile
+    container_name: agrosense-sensor-simulator
+    environment:
+      GATEWAY_ADDR: "gateway:50051"
+      INTERVAL_MS:  "2000"
+    networks:
+      - mesh_net
+    depends_on:
+      - gateway
+    restart: unless-stopped
+
+  # ── 9. Dashboard Web ────────────────────────────────────────────────────
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: agrosense-web
+    environment:
+      WEB_PORT:     "3000"
+      DB_HOST:      "postgres-replica"
+      DB_PORT:      "5432"
+      DB_NAME:      "agrosense"
+      DB_USER:      "agro"
+      DB_PASSWORD:  "agro123"
+    ports:
+      - "3000:3000"
+    networks:
+      - mesh_net
+    depends_on:
+      postgres-replica:
+        condition: service_healthy
+    restart: unless-stopped

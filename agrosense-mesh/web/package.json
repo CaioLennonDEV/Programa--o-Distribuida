@@ -1,0 +1,22 @@
+﻿{
+  "name": "agrosense-web",
+  "version": "1.0.0",
+  "description": "AgroSense Mesh – Real-time Dashboard",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts"
+  },
+  "dependencies": {
+    "fastify": "^4.28.1",
+    "@fastify/static": "^7.0.4",
+    "@fastify/websocket": "^10.0.1",
+    "pg": "^8.12.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.2",
+    "typescript": "^5.4.5",
+    "ts-node": "^10.9.2"
+  }
+}

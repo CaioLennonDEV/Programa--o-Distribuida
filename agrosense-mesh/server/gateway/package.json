@@ -1,0 +1,24 @@
+﻿{
+  "name": "agrosense-gateway",
+  "version": "1.0.0",
+  "description": "AgroSense Mesh – gRPC Gateway",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts"
+  },
+  "dependencies": {
+    "@grpc/grpc-js": "^1.10.6",
+    "@grpc/proto-loader": "^0.7.13",
+    "amqplib": "^0.10.4",
+    "uuid": "^10.0.0"
+  },
+  "devDependencies": {
+    "@types/amqplib": "^0.10.5",
+    "@types/node": "^20.14.2",
+    "@types/uuid": "^10.0.0",
+    "typescript": "^5.4.5",
+    "ts-node": "^10.9.2"
+  }
+}
