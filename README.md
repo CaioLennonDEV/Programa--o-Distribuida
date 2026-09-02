@@ -1,4 +1,4 @@
-﻿# 🌿 AgroSense Mesh
+# 🌿 AgroSense Mesh
 
 **Sistema Distribuído de Telemetria Agrícola**
 Disciplina: Programação Distribuída e Paralela — Modelo "A Metrópole Resiliente"
@@ -206,3 +206,21 @@ agrosense-mesh/
             └── js/
                 └── app.js          # Lógica frontend WS
 ```
+
+---
+
+## 🤖 Declaração de Uso de Inteligência Artificial
+
+Este projeto foi construído utilizando ferramentas de Inteligência Artificial para estruturação da arquitetura base, geração de boilerplate, resolução de bugs em tempo de execução de contêineres e aprimoramento didático da interface gráfica.
+
+*   **Agentes e Modelos Utilizados:** Antigravity IDE & Google Gemini.
+
+### Prompt Original Base Utilizado
+
+O desenvolvimento foi guiado a partir do seguinte prompt inserido no agente de IA:
+
+> "Você é um Arquiteto de Software Especialista em Sistemas Distribuídos e TypeScript/Node.js.
+> Preciso criar a estrutura base modular para o projeto acadêmico AgroSense Mesh (Disciplina de Programação Distribuída e Paralela, modelo 'A Metrópole Resiliente'). O sistema lida com telemetria agrícola distribuída, filas de mensagens, concorrência, relógios lógicos e eleição de líder.
+> Gere a estrutura completa de código dividida conceitualmente em Server (Gateway gRPC + Workers com RabbitMQ), Client (Simulador de Sensores / Ingress), Web (Dashboard visual simples de monitoramento de nós/irrigação) e Banco (Persistência Replicada com banco primário e réplica via Docker)."
+
+Os refinamentos subsequentes envolveram correções de compilação TypeScript com `strict: true`, acertos no roteamento de DNS interno do Docker para os sockets de TCP (Algoritmo Bully) e implementação de websockets do Fastify v10 no frontend.
