@@ -39,14 +39,6 @@ export async function ensureSchema(): Promise<void> {
         activated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         CONSTRAINT uq_irrigation_message_id UNIQUE (message_id)
       );
-
-      CREATE TABLE IF NOT EXISTS leader_election_log (
-        id           SERIAL PRIMARY KEY,
-        worker_id    INTEGER     NOT NULL,
-        event        TEXT        NOT NULL,
-        lamport_time BIGINT      NOT NULL,
-        recorded_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      );
     `);
     console.log('[DB] Schema garantido.');
   } finally {
@@ -82,30 +74,6 @@ export async function persistIrrigationLog(log: IrrigationLog): Promise<boolean>
     throw err;
   } finally {
     client.release();
-  }
-}
-
-/**
- * Registra eventos de eleição de liderança para auditoria.
- */
-export async function recordElectionLog(
-  workerId: number,
-  event: 'ELECTED' | 'RESIGNED' | 'FAILED',
-  lamportTime: number,
-): Promise<void> {
-  let client: PoolClient | null = null;
-  try {
-    client = await pool.connect();
-    await client.query(
-      `INSERT INTO leader_election_log (worker_id, event, lamport_time)
-       VALUES ($1, $2, $3)`,
-      [workerId, event, lamportTime],
-    );
-    console.log(`[DB] Eleição registrada: worker=${workerId} event=${event} L=${lamportTime}`);
-  } catch (err) {
-    console.error('[DB] Erro ao registrar eleição:', err);
-  } finally {
-    client?.release();
   }
 }
 

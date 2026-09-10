@@ -22,15 +22,6 @@ CREATE INDEX IF NOT EXISTS idx_irr_sensor    ON irrigation_log (sensor_id);
 CREATE INDEX IF NOT EXISTS idx_irr_activated ON irrigation_log (activated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_irr_msg_id    ON irrigation_log (message_id);
 
--- Tabela de auditoria de eleição de líder
-CREATE TABLE IF NOT EXISTS leader_election_log (
-  id           SERIAL PRIMARY KEY,
-  worker_id    INTEGER     NOT NULL,
-  event        TEXT        NOT NULL,  -- 'ELECTED' | 'RESIGNED' | 'FAILED'
-  lamport_time BIGINT      NOT NULL,
-  recorded_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
 -- View para o dashboard: últimos 20 logs com temperatura e umidade
 CREATE OR REPLACE VIEW recent_irrigation AS
   SELECT

@@ -1,4 +1,4 @@
-# 🌿 AgroSense Mesh
+# AgroSense Mesh
 ### Processamento de Eventos e Irrigação Automatizada de Precisão
 
 **Disciplina:** Programação Distribuída e Paralela  
@@ -6,7 +6,7 @@
 
 ---
 
-## 👥 Integrantes do Grupo
+## Integrantes do Grupo
 
 - **Caio Lennon**
 - **Livia Louzada**
@@ -14,7 +14,7 @@
 
 ---
 
-## 🌾 1. Domínio Agrícola e Propósito do Sistema
+## 1. Domínio Agrícola e Propósito do Sistema
 
 O **AgroSense Mesh** é uma plataforma distribuída e tolerante a falhas voltada ao monitoramento contínuo de telemetria agropecuária (umidade de solo e temperatura ambiente) em múltiplas zonas de plantio (`Zonas A, B, C, D e E`).
 
@@ -27,7 +27,7 @@ O sistema realiza controle de irrigação de precisão:
 
 ---
 
-## 📐 2. Arquitetura do Sistema
+## 2. Arquitetura do Sistema
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -88,7 +88,7 @@ O sistema realiza controle de irrigação de precisão:
 
 ---
 
-## 🔌 3. Tabela de Portas e Endpoints
+## 3. Tabela de Portas e Endpoints
 
 | Serviço | Porta Host | Porta Container | Protocolo | Descrição |
 | :--- | :--- | :--- | :--- | :--- |
@@ -98,13 +98,13 @@ O sistema realiza controle de irrigação de precisão:
 | **Worker 1 (Eleição)** | `9001` | `9001` | TCP / JSON | Canal TCP do Algoritmo Bully |
 | **Worker 2 (Eleição)** | `9002` | `9002` | TCP / JSON | Canal TCP do Algoritmo Bully |
 | **Worker 3 (Eleição)** | `9003` | `9003` | TCP / JSON | Canal TCP do Algoritmo Bully |
-| **PostgreSQL Primary** | `5432` | `5432` | PostgreSQL | Banco de escrita e replicação |
+| **PostgreSQL Primary** | `5432` | `5432` | PostgreSQL | Banco de escrita e replicação (conflito comum com Postgres local) |
 | **PostgreSQL Replica** | `5433` | `5432` | PostgreSQL | Réplica em Standby físico (leitura) |
 | **Dashboard Web** | `3000` | `3000` | HTTP / WS | Painel em tempo real via WebSockets |
 
 ---
 
-## 🔁 4. Fluxo Ponta a Ponta das Mensagens
+## 4. Fluxo Ponta a Ponta das Mensagens
 
 1. **Geração da Leitura:** O sensor simulador gera uma leitura com `sensor_id`, `zone`, `moisture`, `temperature`, `timestamp` e incrementa seu relógio de Lamport local $L_{local} = L_{local} + 1$.
 2. **Envio gRPC:** O pacote `TelemetryPacket` é transmitido via RPC `SendTelemetry` para o Gateway na porta `50051`.
@@ -115,13 +115,15 @@ O sistema realiza controle de irrigação de precisão:
 5. **Processamento Concorrente (*Competing Consumers*):** Os três nós Workers concorrem pela fila `agro_telemetry_queue` com `prefetch(1)`. Cada worker que recebe uma mensagem:
    - Valida o payload.
    - Atualiza seu relógio: $L_{worker} = \max(L_{local}, L_{gw}) + 1$.
-   - Constrói o objeto `ProcessedTelemetry` enriquecido com $L_{worker}$ e `worker_id`.
+   - Constrói o objeto `ProcessedTelemetry` enriquecido com `worker_lamport` e `worker_id`.
    - Publica o resultado na fila `agro_processed_results`.
    - Envia `ACK` da mensagem original para o RabbitMQ.
 6. **Consolidação Exclusiva pelo Líder:** Apenas o Worker com liderança ativa consome da fila `agro_processed_results`. O Líder:
-   - Sincroniza seu relógio com $L_{worker}$.
+   - Sincroniza seu relógio com `worker_lamport`.
    - Armazena os eventos em um buffer causal ordenado deterministicamente por:
-     $$\text{Critério 1: } L_{worker} \implies \text{Critério 2: } \text{worker\_id} \implies \text{Critério 3: } \text{message\_id}$$
+     1. `worker_lamport`
+     2. `worker_id`
+     3. `message_id`
    - Avalia a regra de irrigação: se `moisture < 40%`, executa inserção idempotente no PostgreSQL Primary:
      ```sql
      INSERT INTO irrigation_log (message_id, sensor_id, zone, moisture, temperature, lamport_time, event_ts, worker_id)
@@ -133,12 +135,43 @@ O sistema realiza controle de irrigação de precisão:
 
 ---
 
-## 🚀 5. Como Executar o Projeto
+## 5. Estrutura do Repositório
+
+```text
+Programa--o-Distribuida/
+├── client/                 # Simulador de sensores (gRPC)
+├── server/
+│   ├── gateway/            # Ingress gRPC + publicação no RabbitMQ
+│   └── worker/             # Competing consumers + Bully + persistência
+├── web/                    # Dashboard Fastify + WebSocket (lê a réplica)
+├── infra/
+│   ├── 00-replication.sh   # Libera replicação no Primary (pg_hba)
+│   └── pg-init.sql         # Schema (irrigation_log + view recent_irrigation)
+├── agro_telemetry.proto    # Contrato gRPC
+├── docker-compose.yml      # Topologia completa da malha
+├── .gitattributes          # Força LF em scripts (compatibilidade Windows)
+└── README.md
+```
+
+---
+
+## 6. Como Executar o Projeto
 
 ### Pré-requisitos
 - Docker Engine $\ge$ 24.x
 - Docker Compose $\ge$ 2.x
 - Node.js $\ge$ 20.x (para compilação/testes locais opcionais)
+- Portas livres: `3000`, `5432`, `5433`, `5672`, `15672`, `50051`, `9001–9003`
+
+### Credenciais do PostgreSQL (lab)
+
+| Parâmetro | Valor |
+| :--- | :--- |
+| Database | `agrosense` |
+| User | `agro` |
+| Password | `agro123` |
+| Primary (host) | `localhost:5432` |
+| Replica (host) | `localhost:5433` |
 
 ### Execução via Docker Compose (Recomendada)
 
@@ -146,12 +179,35 @@ O sistema realiza controle de irrigação de precisão:
 # 1. Construir e subir todos os contêineres em segundo plano
 docker compose up --build -d
 
-# 2. Verificar o status dos contêineres
+# 2. Verificar o status (Primary/Replica devem aparecer como healthy)
 docker compose ps
 
 # 3. Acompanhar os logs unificados de todos os serviços
 docker compose logs -f
 ```
+
+Após a subida, acesse:
+
+| Recurso | URL |
+| :--- | :--- |
+| **Dashboard Web** | http://localhost:3000 |
+| **RabbitMQ Management** | http://localhost:15672 (`guest` / `guest`) |
+
+### Ordem de dependência (healthcheck)
+
+O Compose sobe os serviços respeitando saúde, não apenas “container started”:
+
+1. `rabbitmq` e `postgres-primary` sobem primeiro.
+2. Workers dependem de `rabbitmq` **e** `postgres-primary` *healthy*.
+3. `postgres-replica` clona o Primary via `pg_basebackup` só depois do Primary *healthy*.
+4. `web` depende da réplica *healthy* (leituras somente no Standby).
+
+Healthchecks atuais do Postgres:
+
+| Serviço | `start_period` | `retries` | Motivo |
+| :--- | :--- | :--- | :--- |
+| `postgres-primary` | `60s` | `20` | Tempo de init + scripts em `infra/` |
+| `postgres-replica` | `90s` | `20` | Tempo extra do `pg_basebackup` na 1ª subida |
 
 ### Execução dos Testes Automatizados Locais
 
@@ -160,11 +216,51 @@ docker compose logs -f
 npm test
 ```
 
+### Encerrar / resetar volumes
+
+```bash
+# Para os contêineres (mantém dados)
+docker compose down
+
+# Para e apaga volumes (banco e RabbitMQ zerados — use em lab)
+docker compose down -v
+```
+
+### Troubleshooting: `dependency failed` / `agrosense-pg-primary` unhealthy
+
+Se workers, réplica ou web falharem com erro de *dependency* no `agrosense-pg-primary`, o Primary **não ficou healthy** a tempo (ou nem inicializou). Causas comuns:
+
+1. **CRLF no Windows (scripts `.sh`)**  
+   O init monta `infra/00-replication.sh` no container Linux. Com CRLF o script quebra e o Primary nunca fica saudável.  
+   O repositório força LF via `.gitattributes`. Após atualizar o código:
+   ```bash
+   git add --renormalize .
+   docker compose down -v
+   docker compose up --build -d
+   ```
+
+2. **Porta `5432` ocupada** (PostgreSQL instalado no host)  
+   Encerre o serviço local **ou** altere o mapeamento em `docker-compose.yml`:
+   `"5432:5432"` → ex. `"5434:5432"` (aí o Primary externo fica em `localhost:5434`).
+
+3. **Volume corrompido / init pela metade**  
+   ```bash
+   docker compose down -v
+   docker compose up --build -d
+   ```
+
+4. **Diagnóstico rápido**
+   ```bash
+   docker compose ps
+   docker logs agrosense-pg-primary
+   docker inspect agrosense-pg-primary --format "{{.State.Health.Status}}"
+   ```
+
 ---
 
-## 🧪 6. Guia de Demonstração e Comprovação Prática
+## 7. Guia de Demonstração e Comprovação Prática
 
-### 6.1. Comprovação do Competing Consumers (3 Workers ativos)
+### 7.1. Comprovação do Competing Consumers (3 Workers ativos)
 Execute o comando abaixo para visualizar que **todos os 3 workers** recebem e processam leituras da fila:
 ```bash
 docker compose logs worker-1 worker-2 worker-3 | grep "Leitura processada"
@@ -173,7 +269,7 @@ docker compose logs worker-1 worker-2 worker-3 | grep "Leitura processada"
 
 ---
 
-### 6.2. Comprovação do Relógio Lógico de Lamport
+### 7.2. Comprovação do Relógio Lógico de Lamport
 Observe a progressão monotônica e a sincronização do relógio entre cliente, gateway, workers e líder:
 ```bash
 docker compose logs | grep -E "L_local|L_gw|L_worker|L_leader"
@@ -182,7 +278,7 @@ docker compose logs | grep -E "L_local|L_gw|L_worker|L_leader"
 
 ---
 
-### 6.3. Comprovação da Eleição Bully e Queda do Líder
+### 7.3. Comprovação da Eleição Bully e Queda do Líder
 1. Identifique o líder atual (por padrão, o maior ID ativo `worker-3`):
    ```bash
    docker compose logs worker-1 worker-2 worker-3 | grep "LÍDER"
@@ -203,7 +299,7 @@ docker compose logs | grep -E "L_local|L_gw|L_worker|L_leader"
 
 ---
 
-### 6.4. Comprovação da Replicação PostgreSQL Primary → Replica
+### 7.4. Comprovação da Replicação PostgreSQL Primary → Replica
 1. Verifique que o `postgres-primary` está em modo normal (não recovery) e o `postgres-replica` está em modo Standby/Recovery:
    ```bash
    # Primary deve retornar 'false':
@@ -219,7 +315,7 @@ docker compose logs | grep -E "L_local|L_gw|L_worker|L_leader"
 
 ---
 
-### 6.5. Comprovação de Idempotência
+### 7.5. Comprovação de Idempotência
 Verifique que a constraint de unicidade no banco impede duplicações em caso de reentrega de mensagens:
 ```bash
 docker compose exec postgres-primary psql -U agro -d agrosense -c "SELECT COUNT(*), COUNT(DISTINCT message_id) FROM irrigation_log;"
@@ -228,20 +324,12 @@ docker compose exec postgres-primary psql -U agro -d agrosense -c "SELECT COUNT(
 
 ---
 
-### 6.6. Comprovação do Registro de Mudanças de Liderança
-Consulte a tabela de auditoria de liderança:
-```bash
-docker compose exec postgres-primary psql -U agro -d agrosense -c "SELECT * FROM leader_election_log ORDER BY id DESC;"
-```
-
----
-
-## 📋 7. Evidências Reais de Logs da Aplicação
+## 8. Evidências Reais de Logs da Aplicação
 
 ### Log do Sensor (Client):
 ```text
-[Client] ✓ sensor-A-01 | zone=A | moisture=32.40% temp=24.10°C | L_local=5 → L_gw=6 | msgId=a1b2c3d4...
-[Client] ✓ sensor-B-01 | zone=B | moisture=68.15% temp=19.80°C | L_local=5 → L_gw=7 | msgId=b2c3d4e5...
+[Client] sensor-A-01 | zone=A | moisture=32.40% temp=24.10°C | L_local=5 → L_gw=6 | msgId=a1b2c3d4...
+[Client] sensor-B-01 | zone=B | moisture=68.15% temp=19.80°C | L_local=5 → L_gw=7 | msgId=b2c3d4e5...
 ```
 
 ### Log do Gateway:
@@ -252,28 +340,24 @@ docker compose exec postgres-primary psql -U agro -d agrosense -c "SELECT * FROM
 
 ### Log dos Workers (Competing Consumers):
 ```text
-[Worker-1] ✓ Leitura processada: sensor=sensor-A-01 zone=A moisture=32.4% | L_gw=6 → L_worker=8 | msgId=a1b2c3d4...
-[Worker-2] ✓ Leitura processada: sensor=sensor-B-01 zone=B moisture=68.15% | L_gw=7 → L_worker=9 | msgId=b2c3d4e5...
-```
-
-### Log do Worker Líder (Eleição e Consolidação):
-```text
-[Election/3] 👑 VITÓRIA BULLY: worker-3 é o LÍDER!
-[Leader/Worker-3] ★ Iniciando consumo da fila de consolidação agro_processed_results...
-[Leader/Worker-3] 💧 DECISÃO DE IRRIGAÇÃO: Zona A (umidade=32.4% < 40%) | sensor=sensor-A-01 L_worker=8 L_leader=10 msgId=a1b2c3d4...
+[Worker-1] Leitura processada: sensor=sensor-A-01 zone=A moisture=32.4% | L_gw=6 → L_worker=8 | msgId=a1b2c3d4...
+[Worker-2] Leitura processada: sensor=sensor-B-01 zone=B moisture=68.15% | L_gw=7 → L_worker=9 | msgId=b2c3d4e5...
+[Election/3] VITÓRIA BULLY: worker-3 é o LÍDER!
 [DB] Log de irrigação persistido: msgId=a1b2c3d4-e5f6-7890-abcd-ef1234567890 sensor=sensor-A-01 zone=A L=8
 ```
 
 ---
 
-## 🤖 8. Declaração de Uso de Inteligência Artificial
+## 9. Declaração de Uso de Inteligência Artificial
 
 Este projeto utilizou ferramentas de Inteligência Artificial para análise arquitetural, refatoração de código concorrente, implementação do protocolo de socket TCP do algoritmo Bully, automação de testes unitários e elaboração da documentação técnica.
 
-- **Ferramentas Utilizadas:** Antigravity IDE & Google Gemini.
+- **Ferramentas Utilizadas:** Antigravity IDE, Google Gemini e Cursor.
 - **Intervenções Realizadas:**
   1. Correção do descarte prematuro de mensagens em workers não líderes através da separação entre fila de telemetria e fila de resultados consolidados.
   2. Correção do canal de resposta PING/PONG no mesmo socket TCP para prevenir falsas eleições de líder.
   3. Configuração de replicação física PostgreSQL Streaming Replication (Primary $\to$ Replica).
   4. Implementação de idempotência ponta a ponta com propagação de `message_id` UUID e Publisher Confirms no RabbitMQ.
   5. Criação de suíte de testes unitários em TypeScript estrito.
+  6. Endurecimento da subida Docker (healthchecks com `start_period`, `.gitattributes` com LF e troubleshooting de dependency no Primary).
+  7. Padronização da ordenação causal (`worker_lamport` → `worker_id` → `message_id`) e remoção do `leader_election_log`.

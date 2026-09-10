@@ -1,0 +1,7 @@
+# Força LF em scripts usados dentro de containers Linux.
+# Evita falha de init no Windows (CRLF → bad interpreter / no such file).
+*.sh text eol=lf
+*.bash text eol=lf
+
+# SQL de init também deve permanecer estável entre SO.
+infra/*.sql text eol=lf

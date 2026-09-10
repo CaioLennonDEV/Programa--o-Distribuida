@@ -1,7 +1,7 @@
 import amqp, { ChannelModel, Channel, ConsumeMessage } from 'amqplib';
 import { LamportClock }       from './lamport';
 import { BullyElection }      from './election';
-import { ensureSchema, persistIrrigationLog, recordElectionLog } from './database';
+import { ensureSchema, persistIrrigationLog } from './database';
 
 // ─── Variáveis de Ambiente e Constantes ───────────────────────────────────────
 const NODE_ID          = Number(process.env.NODE_ID ?? 1);
@@ -56,16 +56,17 @@ let leaderChannel:    Channel      | null = null;
 let leaderConsumerTag: string      | null = null;
 
 // ─── Ordenação Causal Determinística ──────────────────────────────────────────
+// Critérios (nesta ordem): 1) worker_lamport  2) worker_id  3) message_id
 export function sortCausalEvents(a: ProcessedTelemetry, b: ProcessedTelemetry): number {
-  // 1. Critério primário: Relógio Lógico de Lamport do Worker que processou
+  // 1. worker_lamport
   if (a.worker_lamport !== b.worker_lamport) {
     return a.worker_lamport - b.worker_lamport;
   }
-  // 2. Desempate determinístico secundário: ID do Worker (menor ID primeiro)
+  // 2. worker_id
   if (a.worker_id !== b.worker_id) {
     return a.worker_id - b.worker_id;
   }
-  // 3. Desempate determinístico terciário: message_id UUID
+  // 3. message_id
   return a.message_id.localeCompare(b.message_id);
 }
 
@@ -324,7 +325,6 @@ async function main(): Promise<void> {
 
     if (newLeaderId === NODE_ID) {
       clock.tick();
-      await recordElectionLog(NODE_ID, 'ELECTED', clock.value);
       await startLeaderConsolidation();
     } else {
       await stopLeaderConsolidation();
