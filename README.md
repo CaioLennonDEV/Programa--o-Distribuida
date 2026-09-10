@@ -145,8 +145,10 @@ Programa--o-Distribuida/
 │   └── worker/             # Competing consumers + Bully + persistência
 ├── web/                    # Dashboard Fastify + WebSocket (lê a réplica)
 ├── infra/
-│   ├── 00-replication.sh   # Libera replicação no Primary (pg_hba)
-│   └── pg-init.sql         # Schema (irrigation_log + view recent_irrigation)
+│   ├── 00-replication.sh        # Init: libera replicação no Primary (pg_hba)
+│   ├── primary-entrypoint.sh    # Garante regra de replicação a cada start
+│   ├── replica-entrypoint.sh    # Clone via pg_basebackup + Standby (com retry)
+│   └── pg-init.sql              # Schema (irrigation_log + view recent_irrigation)
 ├── agro_telemetry.proto    # Contrato gRPC
 ├── docker-compose.yml      # Topologia completa da malha
 ├── .gitattributes          # Força LF em scripts (compatibilidade Windows)
@@ -207,7 +209,7 @@ Healthchecks atuais do Postgres:
 | Serviço | `start_period` | `retries` | Motivo |
 | :--- | :--- | :--- | :--- |
 | `postgres-primary` | `60s` | `20` | Tempo de init + scripts em `infra/` |
-| `postgres-replica` | `90s` | `20` | Tempo extra do `pg_basebackup` na 1ª subida |
+| `postgres-replica` | `120s` | `30` | Tempo do `pg_basebackup` (com retries) na 1ª subida |
 
 ### Execução dos Testes Automatizados Locais
 
@@ -226,12 +228,14 @@ docker compose down
 docker compose down -v
 ```
 
-### Troubleshooting: `dependency failed` / `agrosense-pg-primary` unhealthy
+### Troubleshooting: `dependency failed` / Postgres unhealthy
 
-Se workers, réplica ou web falharem com erro de *dependency* no `agrosense-pg-primary`, o Primary **não ficou healthy** a tempo (ou nem inicializou). Causas comuns:
+#### A) `agrosense-pg-primary` unhealthy
+
+Se workers, réplica ou web falharem com erro de *dependency* no Primary:
 
 1. **CRLF no Windows (scripts `.sh`)**  
-   O init monta `infra/00-replication.sh` no container Linux. Com CRLF o script quebra e o Primary nunca fica saudável.  
+   O init monta scripts de `infra/` no container Linux. Com CRLF o script quebra.  
    O repositório força LF via `.gitattributes`. Após atualizar o código:
    ```bash
    git add --renormalize .
@@ -241,20 +245,36 @@ Se workers, réplica ou web falharem com erro de *dependency* no `agrosense-pg-p
 
 2. **Porta `5432` ocupada** (PostgreSQL instalado no host)  
    Encerre o serviço local **ou** altere o mapeamento em `docker-compose.yml`:
-   `"5432:5432"` → ex. `"5434:5432"` (aí o Primary externo fica em `localhost:5434`).
+   `"5432:5432"` → ex. `"5434:5432"`.
 
-3. **Volume corrompido / init pela metade**  
-   ```bash
-   docker compose down -v
-   docker compose up --build -d
-   ```
-
-4. **Diagnóstico rápido**
+3. **Diagnóstico**
    ```bash
    docker compose ps
    docker logs agrosense-pg-primary
-   docker inspect agrosense-pg-primary --format "{{.State.Health.Status}}"
    ```
+
+#### B) `agrosense-pg-replica` unhealthy / web com dependency na réplica
+
+Causas comuns: volume da réplica pela metade, Primary sem regra de replicação no `pg_hba`, ou `pg_basebackup` falhando na 1ª tentativa.
+
+1. **Reset limpo (recomendado em lab)**
+   ```bash
+   git add --renormalize .
+   docker compose down -v
+   docker compose up --build -d
+   docker compose ps
+   docker logs agrosense-pg-replica
+   ```
+
+2. **Confirme que a réplica está em Standby**
+   ```bash
+   docker compose exec postgres-replica psql -U agro -d agrosense -c "SELECT pg_is_in_recovery();"
+   ```
+   Deve retornar `t` (true).
+
+3. **Porta `5433` ocupada no host** — altere `"5433:5432"` no `docker-compose.yml`.
+
+A réplica agora usa `infra/replica-entrypoint.sh` com **retry** no `pg_basebackup`, e o Primary usa `infra/primary-entrypoint.sh` para garantir a regra `host replication ...` mesmo em volumes antigos.
 
 ---
 
@@ -361,3 +381,4 @@ Este projeto utilizou ferramentas de Inteligência Artificial para análise arqu
   5. Criação de suíte de testes unitários em TypeScript estrito.
   6. Endurecimento da subida Docker (healthchecks com `start_period`, `.gitattributes` com LF e troubleshooting de dependency no Primary).
   7. Padronização da ordenação causal (`worker_lamport` → `worker_id` → `message_id`) e remoção do `leader_election_log`.
+  8. Endurecimento da Réplica (`pg_basebackup` com retry) e garantia de regra de replicação no Primary a cada start.

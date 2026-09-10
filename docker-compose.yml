@@ -50,22 +50,15 @@ services:
       POSTGRES_USER:     agro
       POSTGRES_PASSWORD: agro123
       POSTGRES_HOST_AUTH_METHOD: trust
-    command:
-      - "postgres"
-      - "-c"
-      - "wal_level=replica"
-      - "-c"
-      - "max_wal_senders=10"
-      - "-c"
-      - "max_replication_slots=10"
-      - "-c"
-      - "hot_standby=on"
+      PGDATA:            /var/lib/postgresql/data
     ports:
       - "5432:5432"
     volumes:
       - postgres_primary_data:/var/lib/postgresql/data
       - ./infra/00-replication.sh:/docker-entrypoint-initdb.d/00-replication.sh
       - ./infra/pg-init.sql:/docker-entrypoint-initdb.d/01-init.sql
+      - ./infra/primary-entrypoint.sh:/primary-entrypoint.sh
+    entrypoint: ["/bin/sh", "/primary-entrypoint.sh"]
     networks:
       - mesh_net
     healthcheck:
@@ -74,6 +67,7 @@ services:
       timeout: 5s
       retries: 20
       start_period: 60s
+    restart: unless-stopped
 
   # ── 3. PostgreSQL Replica (Leitura / Standby Streaming Replication) ────
   postgres-replica:
@@ -86,39 +80,25 @@ services:
       POSTGRES_PASSWORD: agro123
       POSTGRES_HOST_AUTH_METHOD: trust
       PGPASSWORD:        agro123
+      PGDATA:            /var/lib/postgresql/data
     ports:
       - "5433:5432"
     volumes:
       - postgres_replica_data:/var/lib/postgresql/data
+      - ./infra/replica-entrypoint.sh:/replica-entrypoint.sh
     networks:
       - mesh_net
     depends_on:
       postgres-primary:
         condition: service_healthy
-    entrypoint:
-      - /bin/sh
-      - -c
-      - |
-        until pg_isready -h postgres-primary -p 5432 -U agro -d agrosense; do
-          echo "[Replica] Aguardando postgres-primary ficar pronto..."
-          sleep 1
-        done
-        if [ ! -s /var/lib/postgresql/data/PG_VERSION ]; then
-          echo "[Replica] Diretório vazio. Clonando Primary via pg_basebackup com streaming replication..."
-          rm -rf /var/lib/postgresql/data/*
-          PGPASSWORD=agro123 pg_basebackup -h postgres-primary -p 5432 -U agro -D /var/lib/postgresql/data -Fp -Xs -R
-          chown -R postgres:postgres /var/lib/postgresql/data
-          chmod 700 /var/lib/postgresql/data
-          echo "[Replica] Clone concluído com sucesso."
-        fi
-        echo "[Replica] Iniciando PostgreSQL Replica em modo Standby..."
-        exec su-exec postgres postgres -D /var/lib/postgresql/data -c hot_standby=on
+    entrypoint: ["/bin/sh", "/replica-entrypoint.sh"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U agro -d agrosense"]
       interval: 5s
       timeout: 5s
-      retries: 20
-      start_period: 90s
+      retries: 30
+      start_period: 120s
+    restart: unless-stopped
 
   # ── 4. Gateway gRPC ─────────────────────────────────────────────────────
   gateway:
