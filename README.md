@@ -235,8 +235,7 @@ docker compose down -v
 Se workers, réplica ou web falharem com erro de *dependency* no Primary:
 
 1. **CRLF no Windows (scripts `.sh`)**  
-   O init monta scripts de `infra/` no container Linux. Com CRLF o script quebra.  
-   O repositório força LF via `.gitattributes`. Após atualizar o código:
+   Scripts de `infra/` são sanitizados no container (`tr -d '\\r'`), mas ainda assim use LF no Git:
    ```bash
    git add --renormalize .
    docker compose down -v

@@ -55,10 +55,11 @@ services:
       - "5432:5432"
     volumes:
       - postgres_primary_data:/var/lib/postgresql/data
-      - ./infra/00-replication.sh:/docker-entrypoint-initdb.d/00-replication.sh
-      - ./infra/pg-init.sql:/docker-entrypoint-initdb.d/01-init.sql
-      - ./infra/primary-entrypoint.sh:/primary-entrypoint.sh
-    entrypoint: ["/bin/sh", "/primary-entrypoint.sh"]
+      - ./infra/00-replication.sh:/infra-scripts/00-replication.sh:ro
+      - ./infra/pg-init.sql:/infra-scripts/01-init.sql:ro
+      - ./infra/primary-entrypoint.sh:/primary-entrypoint.sh:ro
+    # Remove \r (CRLF do Windows) antes de executar o script montado
+    entrypoint: ["/bin/sh", "-c", "tr -d '\\r' < /primary-entrypoint.sh > /tmp/primary-entrypoint.sh && exec /bin/sh /tmp/primary-entrypoint.sh"]
     networks:
       - mesh_net
     healthcheck:
@@ -91,7 +92,8 @@ services:
     depends_on:
       postgres-primary:
         condition: service_healthy
-    entrypoint: ["/bin/sh", "/replica-entrypoint.sh"]
+    # Remove \r (CRLF do Windows) antes de executar o script montado
+    entrypoint: ["/bin/sh", "-c", "tr -d '\\r' < /replica-entrypoint.sh > /tmp/replica-entrypoint.sh && exec /bin/sh /tmp/replica-entrypoint.sh"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U agro -d agrosense"]
       interval: 5s
