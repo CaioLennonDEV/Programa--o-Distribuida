@@ -145,8 +145,9 @@ Programa--o-Distribuida/
 │   └── worker/             # Competing consumers + Bully + persistência
 ├── web/                    # Dashboard Fastify + WebSocket (lê a réplica)
 ├── infra/
-│   ├── 00-replication.sh        # Init: libera replicação no Primary (pg_hba)
-│   ├── primary-entrypoint.sh    # Garante regra de replicação a cada start
+│   ├── 00-replication.sh        # Init: reforça replicação no Primary (pg_hba)
+│   ├── pg_hba.conf              # HBA autoritativo (all + replication trust)
+│   ├── primary-entrypoint.sh    # Aplica pg_hba e sobe o Primary
 │   ├── replica-entrypoint.sh    # Clone via pg_basebackup + Standby (com retry)
 │   └── pg-init.sql              # Schema (irrigation_log + view recent_irrigation)
 ├── agro_telemetry.proto    # Contrato gRPC
@@ -252,11 +253,11 @@ Se workers, réplica ou web falharem com erro de *dependency* no Primary:
    docker logs agrosense-pg-primary
    ```
 
-#### B) `agrosense-pg-replica` unhealthy / web com dependency na réplica
+#### B) `agrosense-pg-replica` unhealthy / `no pg_hba.conf entry for replication`
 
-Causas comuns: volume da réplica pela metade, Primary sem regra de replicação no `pg_hba`, ou `pg_basebackup` falhando na 1ª tentativa.
+Causa típica: o Primary aceita conexões normais, mas **bloqueia replicação** no `pg_hba.conf`.
 
-1. **Reset limpo (recomendado em lab)**
+1. **Atualize o código** (agora o Primary força `infra/pg_hba.conf` com `host replication ... trust`) e reset limpo:
    ```bash
    git add --renormalize .
    docker compose down -v
@@ -272,8 +273,6 @@ Causas comuns: volume da réplica pela metade, Primary sem regra de replicação
    Deve retornar `t` (true).
 
 3. **Porta `5433` ocupada no host** — altere `"5433:5432"` no `docker-compose.yml`.
-
-A réplica agora usa `infra/replica-entrypoint.sh` com **retry** no `pg_basebackup`, e o Primary usa `infra/primary-entrypoint.sh` para garantir a regra `host replication ...` mesmo em volumes antigos.
 
 ---
 

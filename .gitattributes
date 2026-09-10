@@ -3,5 +3,6 @@
 *.sh text eol=lf
 *.bash text eol=lf
 
-# SQL de init também deve permanecer estável entre SO.
+# SQL e HBA de init também devem permanecer estáveis entre SO.
 infra/*.sql text eol=lf
+infra/pg_hba.conf text eol=lf

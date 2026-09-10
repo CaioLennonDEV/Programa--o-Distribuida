@@ -57,6 +57,7 @@ services:
       - postgres_primary_data:/var/lib/postgresql/data
       - ./infra/00-replication.sh:/infra-scripts/00-replication.sh:ro
       - ./infra/pg-init.sql:/infra-scripts/01-init.sql:ro
+      - ./infra/pg_hba.conf:/infra-scripts/pg_hba.conf:ro
       - ./infra/primary-entrypoint.sh:/primary-entrypoint.sh:ro
     # Remove \r (CRLF do Windows) antes de executar o script montado
     entrypoint: ["/bin/sh", "-c", "tr -d '\\r' < /primary-entrypoint.sh > /tmp/primary-entrypoint.sh && exec /bin/sh /tmp/primary-entrypoint.sh"]

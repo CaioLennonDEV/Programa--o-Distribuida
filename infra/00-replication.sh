@@ -1,7 +1,11 @@
 #!/bin/sh
 set -e
 
-echo "[PostgreSQL Primary] Configurando permissões de replicação em pg_hba.conf..."
-echo "host replication all 0.0.0.0/0 trust" >> "$PGDATA/pg_hba.conf"
+echo "[PostgreSQL Primary] Configurando permissoes de replicacao em pg_hba.conf..."
+cat >> "$PGDATA/pg_hba.conf" <<'EOF'
+host replication all 0.0.0.0/0 trust
+host replication all ::/0 trust
+host replication all all trust
+EOF
 pg_ctl -D "$PGDATA" reload || true
-echo "[PostgreSQL Primary] Permissão de replicação habilitada."
+echo "[PostgreSQL Primary] Permissao de replicacao habilitada."
