@@ -1,8 +1,9 @@
-﻿-- AgroSense Mesh – Inicialização do Banco de Dados
+-- AgroSense Mesh – Inicialização do Banco de Dados
 
 -- Tabela principal de logs de irrigação (gerada pelo Worker Líder)
 CREATE TABLE IF NOT EXISTS irrigation_log (
   id           SERIAL PRIMARY KEY,
+  message_id   UUID        NOT NULL,
   sensor_id    TEXT        NOT NULL,
   zone         TEXT        NOT NULL,
   moisture     REAL        NOT NULL,
@@ -10,7 +11,8 @@ CREATE TABLE IF NOT EXISTS irrigation_log (
   lamport_time BIGINT      NOT NULL,
   event_ts     BIGINT      NOT NULL,
   worker_id    INTEGER     NOT NULL,
-  activated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  activated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT uq_irrigation_message_id UNIQUE (message_id)
 );
 
 -- Índices para performance de leitura no dashboard
@@ -18,19 +20,21 @@ CREATE INDEX IF NOT EXISTS idx_irr_lamport   ON irrigation_log (lamport_time DES
 CREATE INDEX IF NOT EXISTS idx_irr_zone      ON irrigation_log (zone);
 CREATE INDEX IF NOT EXISTS idx_irr_sensor    ON irrigation_log (sensor_id);
 CREATE INDEX IF NOT EXISTS idx_irr_activated ON irrigation_log (activated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_irr_msg_id    ON irrigation_log (message_id);
 
 -- Tabela de auditoria de eleição de líder
 CREATE TABLE IF NOT EXISTS leader_election_log (
-  id          SERIAL PRIMARY KEY,
-  worker_id   INTEGER     NOT NULL,
-  event       TEXT        NOT NULL,  -- 'ELECTED' | 'RESIGNED' | 'FAILED'
-  lamport_time BIGINT     NOT NULL,
-  recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id           SERIAL PRIMARY KEY,
+  worker_id    INTEGER     NOT NULL,
+  event        TEXT        NOT NULL,  -- 'ELECTED' | 'RESIGNED' | 'FAILED'
+  lamport_time BIGINT      NOT NULL,
+  recorded_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- View para o dashboard: últimos 20 logs com temperatura e umidade
 CREATE OR REPLACE VIEW recent_irrigation AS
   SELECT
+    message_id,
     sensor_id,
     zone,
     ROUND(moisture::numeric, 1)    AS moisture_pct,
@@ -41,3 +45,4 @@ CREATE OR REPLACE VIEW recent_irrigation AS
   FROM irrigation_log
   ORDER BY lamport_time DESC
   LIMIT 20;
+

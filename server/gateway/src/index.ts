@@ -1,29 +1,39 @@
 import path from 'path';
+import { randomUUID } from 'crypto';
 import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
 import { LamportClock } from './lamport';
 import { RabbitMQPublisher } from './rabbitmq';
 
 // ─── Tipos derivados do .proto ───────────────────────────────────────────────
-interface TelemetryPacket {
-  sensor_id: string;
-  zone: string;
-  moisture: number;
-  temperature: number;
-  timestamp: number;
+export interface TelemetryPacket {
+  sensor_id:     string;
+  zone:          string;
+  moisture:      number;
+  temperature:   number;
+  timestamp:     number;
   lamport_clock: number;
 }
 
-interface TelemetryAck {
-  queued: boolean;
-  message_id: string;
+export interface TelemetryAck {
+  queued:          boolean;
+  message_id:      string;
   gateway_lamport: number;
-  info: string;
+  info:            string;
+}
+
+export interface WatchRequest {
+  client_id: string;
+}
+
+export interface WorkerStatusEvent {
+  node_id:      string;
+  status:       string;
+  lamport_time: number;
+  event_ts:     number;
 }
 
 // ─── Bootstrap ───────────────────────────────────────────────────────────────
-// Em produção: __dirname = /app/dist → proto em /app/agro_telemetry.proto (../)
-// Em dev (ts-node): __dirname = /app/src → proto em /app/agro_telemetry.proto (../)
 const PROTO_PATH = process.env.PROTO_PATH
   ?? path.resolve(__dirname, '../agro_telemetry.proto');
 const GRPC_PORT  = process.env.GRPC_PORT ?? '50051';
@@ -37,87 +47,124 @@ async function main(): Promise<void> {
   // Carrega o pacote proto em tempo de execução
   const packageDef = protoLoader.loadSync(PROTO_PATH, {
     keepCase: true,
-    longs: String,
+    longs: Number,
     enums: String,
     defaults: true,
     oneofs: true,
   });
 
+  const protoDescriptor = grpc.loadPackageDefinition(packageDef);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const proto = grpc.loadPackageDefinition(packageDef) as any;
+  const agrosensePkg = (protoDescriptor as any).agrosense;
 
   // ─── Implementação dos handlers gRPC ──────────────────────────────────────
   const handlers = {
     /**
-     * SendTelemetry – recebe telemetria, atualiza relógio de Lamport,
-     * publica na fila e devolve ACK imediato.
+     * SendTelemetry – recebe telemetria do sensor, sincroniza o relógio de Lamport,
+     * enriquece o pacote com message_id e gateway_lamport, publica no RabbitMQ com
+     * confirmação de broker e responde o ACK sem bloquear a linha de processamento.
      */
     SendTelemetry: async (
       call: grpc.ServerUnaryCall<TelemetryPacket, TelemetryAck>,
       callback: grpc.sendUnaryData<TelemetryAck>,
     ): Promise<void> => {
-      const packet = call.request;
+      try {
+        const packet = call.request;
 
-      // Sincroniza relógio de Lamport: L = max(L_local, L_msg) + 1
-      clock.receive(packet.lamport_clock);
-      const gatewayLamport = clock.tick();
+        // 1. Sincronização causal de Lamport: L = max(L_local, L_msg) + 1
+        clock.receive(Number(packet.lamport_clock));
+        const gatewayLamport = clock.tick();
 
-      const enriched = {
-        ...packet,
-        gateway_lamport: gatewayLamport,
-        received_at: Date.now(),
-      };
+        // 2. Criação do UUID determinístico ponta a ponta
+        const messageId = randomUUID();
 
-      const { messageId, success } = await publisher.publish(enriched);
+        const enriched = {
+          message_id:      messageId,
+          sensor_id:       packet.sensor_id,
+          zone:            packet.zone,
+          moisture:        Number(packet.moisture),
+          temperature:     Number(packet.temperature),
+          timestamp:       Number(packet.timestamp),
+          lamport_clock:   Number(packet.lamport_clock),
+          gateway_lamport: gatewayLamport,
+          received_at:     Date.now(),
+        };
 
-      const ack: TelemetryAck = {
-        queued:          success,
-        message_id:      messageId,
-        gateway_lamport: gatewayLamport,
-        info:            success
-          ? `Enfileirado em agro_telemetry_queue [L=${gatewayLamport}]`
-          : 'Falha ao enfileirar – tente novamente',
-      };
+        // 3. Publicação com Publisher Confirms
+        const { success } = await publisher.publish(enriched);
 
-      callback(null, ack);
+        const ack: TelemetryAck = {
+          queued:          success,
+          message_id:      messageId,
+          gateway_lamport: gatewayLamport,
+          info:            success
+            ? `Enfileirado em agro_telemetry_queue [L=${gatewayLamport}]`
+            : 'Falha ao enfileirar no broker RabbitMQ',
+        };
+
+        callback(null, ack);
+      } catch (err) {
+        console.error('[Gateway] Erro no handler SendTelemetry:', err);
+        callback({
+          code: grpc.status.INTERNAL,
+          message: err instanceof Error ? err.message : 'Erro interno no Gateway',
+        }, null);
+      }
     },
 
     /**
-     * WatchWorkerStatus – server-side streaming: emite um evento inicial
-     * e mantém o stream aberto para que o dashboard web possa observar.
-     * (Workers enviam eventos para o DB; o web backend os lê e emite via WS.)
+     * WatchWorkerStatus – server-side streaming
      */
     WatchWorkerStatus: (
-      call: grpc.ServerWritableStream<{ client_id: string }, unknown>,
+      call: grpc.ServerWritableStream<WatchRequest, WorkerStatusEvent>,
     ): void => {
-      console.log(`[Gateway] WatchWorkerStatus: cliente "${call.request.client_id}" conectado`);
-      // Mantém o stream aberto — eventos são enviados por eventos externos
-      // Exemplo de keep-alive simples (workers atualizam via DB/broadcast)
+      console.log(`[Gateway] WatchWorkerStatus: cliente "${call.request?.client_id ?? 'desconhecido'}" conectado`);
+      
       const interval = setInterval(() => {
-        if (call.cancelled) { clearInterval(interval); return; }
+        if (call.cancelled) {
+          clearInterval(interval);
+          return;
+        }
         try {
-          call.write({ node_id: 'gateway', status: 'ACTIVE', lamport_time: clock.value, event_ts: Date.now() });
+          call.write({
+            node_id:      'gateway',
+            status:       'ACTIVE',
+            lamport_time: clock.value,
+            event_ts:     Date.now(),
+          });
         } catch {
           clearInterval(interval);
         }
       }, 5000);
 
-      call.on('cancelled', () => clearInterval(interval));
+      call.on('cancelled', () => {
+        clearInterval(interval);
+      });
     },
   };
 
   // ─── Cria e inicia o servidor gRPC ────────────────────────────────────────
   const server = new grpc.Server();
-  server.addService(proto.agrosense.AgroTelemetryService.service, handlers);
+  server.addService(agrosensePkg.AgroTelemetryService.service, handlers);
 
   server.bindAsync(
     `0.0.0.0:${GRPC_PORT}`,
     grpc.ServerCredentials.createInsecure(),
     (err, port) => {
-      if (err) { console.error('[Gateway] Erro ao iniciar:', err); process.exit(1); }
-      console.log(`[Gateway] gRPC escutando na porta ${port} | Lamport=${clock.value}`);
+      if (err) {
+        console.error('[Gateway] Erro fatal ao iniciar gRPC:', err);
+        process.exit(1);
+      }
+      console.log(`[Gateway] gRPC escutando na porta ${port} | Lamport inicial=${clock.value}`);
     },
   );
 }
 
-main().catch(err => { console.error('[Gateway] Fatal:', err); process.exit(1); });
+if (require.main === module) {
+  main().catch(err => {
+    console.error('[Gateway] Erro fatal:', err);
+    process.exit(1);
+  });
+}
+
+

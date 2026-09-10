@@ -3,8 +3,6 @@ import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
 
 // ─── Configuração ────────────────────────────────────────────────────────────
-// Em produção: __dirname = /app/dist → proto em /app/agro_telemetry.proto
-// Em dev (ts-node): __dirname = /app/src → proto em /app/agro_telemetry.proto
 const PROTO_PATH = process.env.PROTO_PATH
   ?? path.resolve(__dirname, '../agro_telemetry.proto');
 const GATEWAY_ADDR = process.env.GATEWAY_ADDR ?? 'localhost:50051';
@@ -12,11 +10,11 @@ const INTERVAL_MS  = Number(process.env.INTERVAL_MS ?? 2000);
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 interface TelemetryPacket {
-  sensor_id:    string;
-  zone:         string;
-  moisture:     number;
-  temperature:  number;
-  timestamp:    number;
+  sensor_id:     string;
+  zone:          string;
+  moisture:      number;
+  temperature:   number;
+  timestamp:     number;
   lamport_clock: number;
 }
 
@@ -25,6 +23,13 @@ interface TelemetryAck {
   message_id:      string;
   gateway_lamport: number;
   info:            string;
+}
+
+interface AgroTelemetryClient extends grpc.Client {
+  SendTelemetry(
+    argument: TelemetryPacket,
+    callback: (error: grpc.ServiceError | null, response: TelemetryAck) => void
+  ): grpc.ClientUnaryCall;
 }
 
 // ─── Relógio de Lamport local do simulador ────────────────────────────────────
@@ -56,14 +61,17 @@ function randomReading(sensor: { id: string; zone: string }): TelemetryPacket {
   };
 }
 
-// ─── Função de envio ─────────────────────────────────────────────────────────
+// ─── Função de envio tipada ──────────────────────────────────────────────────
 function sendTelemetry(
-  client: grpc.Client & { SendTelemetry: Function },
+  client: AgroTelemetryClient,
   packet: TelemetryPacket,
 ): Promise<TelemetryAck> {
   return new Promise((resolve, reject) => {
-    (client as any).SendTelemetry(packet, (err: grpc.ServiceError | null, response: TelemetryAck) => {
-      if (err) { reject(err); return; }
+    client.SendTelemetry(packet, (err, response) => {
+      if (err) {
+        reject(err);
+        return;
+      }
       resolve(response);
     });
   });
@@ -73,19 +81,20 @@ function sendTelemetry(
 async function main(): Promise<void> {
   const packageDef = protoLoader.loadSync(PROTO_PATH, {
     keepCase: true,
-    longs: String,
+    longs: Number,
     enums: String,
     defaults: true,
     oneofs: true,
   });
 
+  const protoDescriptor = grpc.loadPackageDefinition(packageDef);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const proto = grpc.loadPackageDefinition(packageDef) as any;
+  const AgroService = (protoDescriptor as any).agrosense.AgroTelemetryService;
 
-  const grpcClient = new proto.agrosense.AgroTelemetryService(
+  const grpcClient = new AgroService(
     GATEWAY_ADDR,
     grpc.credentials.createInsecure(),
-  );
+  ) as AgroTelemetryClient;
 
   console.log(`\n══════════════════════════════════════════════`);
   console.log(` AgroSense Sensor Simulator`);
@@ -121,4 +130,11 @@ async function main(): Promise<void> {
   }, INTERVAL_MS);
 }
 
-main().catch(err => { console.error('[Client] Fatal:', err); process.exit(1); });
+if (require.main === module) {
+  main().catch(err => {
+    console.error('[Client] Erro fatal:', err);
+    process.exit(1);
+  });
+}
+
+

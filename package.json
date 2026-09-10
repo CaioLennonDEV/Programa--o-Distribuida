@@ -1,0 +1,13 @@
+{
+  "name": "agrosense-mesh",
+  "version": "1.0.0",
+  "description": "AgroSense Mesh – Processamento de Eventos e Irrigação Automatizada de Precisão",
+  "private": true,
+  "scripts": {
+    "build": "npm --prefix client run build && npm --prefix server/gateway run build && npm --prefix server/worker run build && npm --prefix web run build",
+    "test": "npm --prefix server/worker test",
+    "compose:up": "docker compose up --build -d",
+    "compose:down": "docker compose down -v",
+    "compose:logs": "docker compose logs -f"
+  }
+}

@@ -1,8 +1,10 @@
-import amqp, { ChannelModel, Channel } from 'amqplib';
-import { randomUUID } from 'crypto';
+import amqp, { ChannelModel, ConfirmChannel } from 'amqplib';
 
 const RABBITMQ_URL = process.env.RABBITMQ_URL ?? 'amqp://guest:guest@localhost:5672';
-const QUEUE_NAME   = 'agro_telemetry_queue';
+export const TELEMETRY_QUEUE = 'agro_telemetry_queue';
+export const PROCESSED_QUEUE = 'agro_processed_results';
+export const DLX_EXCHANGE    = 'agro_telemetry_dlx';
+export const DLQ_QUEUE       = 'agro_telemetry_dlq';
 
 export interface PublishResult {
   messageId: string;
@@ -10,71 +12,127 @@ export interface PublishResult {
 }
 
 export class RabbitMQPublisher {
-  private connection: ChannelModel | null = null;
-  private channel:    Channel      | null = null;
+  private connection:     ChannelModel   | null = null;
+  private confirmChannel: ConfirmChannel | null = null;
+  private isConnecting:   boolean               = false;
+  private isClosing:      boolean               = false;
 
   async connect(): Promise<void> {
-    const MAX_RETRIES = 10;
-    const DELAY_MS    = 3000;
+    if (this.confirmChannel && this.connection) return;
+    if (this.isConnecting) return;
+    this.isConnecting = true;
+
+    const MAX_RETRIES = 15;
+    const BASE_DELAY  = 2000;
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
+        console.log(`[RabbitMQ/Gateway] Conectando a ${RABBITMQ_URL} (tentativa ${attempt}/${MAX_RETRIES})...`);
         this.connection = await amqp.connect(RABBITMQ_URL);
-        this.channel    = await this.connection.createChannel();
 
-        // Fila durável – sobrevive a reinícios do broker
-        await this.channel.assertQueue(QUEUE_NAME, { durable: true });
+        this.connection.on('error', (err) => {
+          console.error('[RabbitMQ/Gateway] Erro de conexão:', err.message);
+        });
 
-        console.log(`[RabbitMQ] Conectado em ${RABBITMQ_URL} | Fila: ${QUEUE_NAME}`);
+        this.connection.on('close', () => {
+          if (!this.isClosing) {
+            console.warn('[RabbitMQ/Gateway] Conexão encerrada inesperadamente. Iniciando reconexão...');
+            this.confirmChannel = null;
+            this.connection = null;
+            setTimeout(() => this.connect().catch(() => {}), 3000);
+          }
+        });
 
-        this.connection.on('error',  (err) => console.error('[RabbitMQ] Erro de conexão:', err));
-        this.connection.on('close',  ()    => console.warn('[RabbitMQ] Conexão encerrada – reconectando...'));
+        this.confirmChannel = await this.connection.createConfirmChannel();
 
+        // 1. Configura Dead Letter Exchange e Dead Letter Queue
+        await this.confirmChannel.assertExchange(DLX_EXCHANGE, 'direct', { durable: true });
+        await this.confirmChannel.assertQueue(DLQ_QUEUE, { durable: true });
+        await this.confirmChannel.bindQueue(DLQ_QUEUE, DLX_EXCHANGE, 'dead-letter');
+
+        // 2. Configura fila principal com redirecionamento para DLX em caso de rejeição
+        await this.confirmChannel.assertQueue(TELEMETRY_QUEUE, {
+          durable: true,
+          deadLetterExchange: DLX_EXCHANGE,
+          deadLetterRoutingKey: 'dead-letter',
+        });
+
+        // 3. Garante que a fila de resultados processados também existe
+        await this.confirmChannel.assertQueue(PROCESSED_QUEUE, { durable: true });
+
+        console.log(`[RabbitMQ/Gateway] Conectado e filas assertadas: ${TELEMETRY_QUEUE}, ${PROCESSED_QUEUE}, ${DLQ_QUEUE}`);
+        this.isConnecting = false;
         return;
       } catch (err) {
-        console.warn(`[RabbitMQ] Tentativa ${attempt}/${MAX_RETRIES} falhou. Aguardando ${DELAY_MS}ms...`);
-        await new Promise(res => setTimeout(res, DELAY_MS));
+        const msg = err instanceof Error ? err.message : String(err);
+        const delay = Math.min(BASE_DELAY * attempt, 10000);
+        console.warn(`[RabbitMQ/Gateway] Falha na conexão (${msg}). Aguardando ${delay}ms...`);
+        await new Promise(res => setTimeout(res, delay));
       }
     }
 
-    throw new Error('[RabbitMQ] Não foi possível estabelecer conexão após todas as tentativas.');
+    this.isConnecting = false;
+    throw new Error('[RabbitMQ/Gateway] Falha fatal: Não foi possível conectar ao RabbitMQ após múltiplas tentativas.');
   }
 
   /**
-   * Publica uma mensagem de telemetria na fila principal.
-   * A flag `persistent: true` garante que a mensagem survive a reinícios do broker.
+   * Publica mensagem no RabbitMQ utilizando ConfirmChannel.
+   * A promise resolve somente após o ACK do broker RabbitMQ.
    */
-  async publish(payload: Record<string, unknown>): Promise<PublishResult> {
-    const messageId = randomUUID();
+  async publish(payload: Record<string, unknown> & { message_id: string }): Promise<PublishResult> {
+    const messageId = payload.message_id;
 
-    if (!this.channel) {
-      console.error('[RabbitMQ] Canal não disponível.');
-      return { messageId, success: false };
-    }
-
-    try {
-      const buffer = Buffer.from(JSON.stringify(payload));
-
-      const success = this.channel.sendToQueue(QUEUE_NAME, buffer, {
-        persistent:  true,
-        messageId,
-        contentType: 'application/json',
-        timestamp:   Math.floor(Date.now() / 1000),
-      });
-
-      if (success) {
-        console.log(`[RabbitMQ] Publicado msgId=${messageId} sensor=${payload['sensor_id']}`);
+    if (!this.confirmChannel) {
+      console.warn('[RabbitMQ/Gateway] Canal não disponível ao publicar. Tentando reconectar...');
+      try {
+        await this.connect();
+      } catch (e) {
+        return { messageId, success: false };
       }
+    }
 
-      return { messageId, success };
-    } catch (err) {
-      console.error('[RabbitMQ] Erro ao publicar:', err);
+    if (!this.confirmChannel) {
       return { messageId, success: false };
     }
+
+    return new Promise<PublishResult>((resolve) => {
+      try {
+        const buffer = Buffer.from(JSON.stringify(payload));
+
+        this.confirmChannel!.sendToQueue(
+          TELEMETRY_QUEUE,
+          buffer,
+          {
+            persistent:  true,
+            messageId,
+            contentType: 'application/json',
+            timestamp:   Math.floor(Date.now() / 1000),
+          },
+          (err) => {
+            if (err) {
+              console.error(`[RabbitMQ/Gateway] NACK do broker para msgId=${messageId}:`, err);
+              resolve({ messageId, success: false });
+            } else {
+              console.log(`[RabbitMQ/Gateway] Broker CONFIRM msgId=${messageId} sensor=${payload['sensor_id']} L_gw=${payload['gateway_lamport']}`);
+              resolve({ messageId, success: true });
+            }
+          }
+        );
+      } catch (err) {
+        console.error('[RabbitMQ/Gateway] Exceção ao publicar:', err);
+        resolve({ messageId, success: false });
+      }
+    });
   }
 
   async close(): Promise<void> {
-    await this.channel?.close();
-    await this.connection?.close();
+    this.isClosing = true;
+    try {
+      await this.confirmChannel?.close();
+      await this.connection?.close();
+    } catch {
+      // fechamento limpo
+    }
   }
 }
+

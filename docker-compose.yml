@@ -1,8 +1,7 @@
-﻿# ═══════════════════════════════════════════════════════════════════════════
-#  AgroSense Mesh – docker-compose.yml
-#  Topologia: RabbitMQ | Gateway | 3x Workers | PG Primary+Replica | Web
 # ═══════════════════════════════════════════════════════════════════════════
-version: "3.9"
+#  AgroSense Mesh – docker-compose.yml
+#  Topologia: RabbitMQ | Gateway | 3x Workers | PG Primary + PG Replica Real | Web | Sensors
+# ═══════════════════════════════════════════════════════════════════════════
 
 # ─── Volumes Persistentes ───────────────────────────────────────────────────
 volumes:
@@ -20,7 +19,7 @@ networks:
 # ─── Serviços ──────────────────────────────────────────────────────────────
 services:
 
-  # ── 1. RabbitMQ ────────────────────────────────────────────────────────
+  # ── 1. RabbitMQ Broker ─────────────────────────────────────────────────
   rabbitmq:
     image: rabbitmq:3.13-management-alpine
     container_name: agrosense-rabbitmq
@@ -37,52 +36,85 @@ services:
       - mesh_net
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "ping"]
-      interval: 10s
+      interval: 8s
       timeout: 5s
       retries: 10
 
-  # ── 2. PostgreSQL Primary ───────────────────────────────────────────────
+  # ── 2. PostgreSQL Primary (Escrita / Master) ────────────────────────────
   postgres-primary:
     image: postgres:16-alpine
     container_name: agrosense-pg-primary
+    hostname: postgres-primary
     environment:
       POSTGRES_DB:       agrosense
       POSTGRES_USER:     agro
       POSTGRES_PASSWORD: agro123
       POSTGRES_HOST_AUTH_METHOD: trust
+    command:
+      - "postgres"
+      - "-c"
+      - "wal_level=replica"
+      - "-c"
+      - "max_wal_senders=10"
+      - "-c"
+      - "max_replication_slots=10"
+      - "-c"
+      - "hot_standby=on"
     ports:
       - "5432:5432"
     volumes:
       - postgres_primary_data:/var/lib/postgresql/data
+      - ./infra/00-replication.sh:/docker-entrypoint-initdb.d/00-replication.sh
       - ./infra/pg-init.sql:/docker-entrypoint-initdb.d/01-init.sql
     networks:
       - mesh_net
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U agro -d agrosense"]
-      interval: 10s
+      interval: 5s
       timeout: 5s
       retries: 10
 
-  # ── 3. PostgreSQL Replica (streaming replica simples via pgpool ou standby)
-  #     Aqui usamos uma instância independente como "replica de leitura"
-  #     para o dashboard web (cenário educacional simplificado).
+  # ── 3. PostgreSQL Replica (Leitura / Standby Streaming Replication) ────
   postgres-replica:
     image: postgres:16-alpine
     container_name: agrosense-pg-replica
+    hostname: postgres-replica
     environment:
       POSTGRES_DB:       agrosense
       POSTGRES_USER:     agro
       POSTGRES_PASSWORD: agro123
+      POSTGRES_HOST_AUTH_METHOD: trust
+      PGPASSWORD:        agro123
     ports:
       - "5433:5432"
     volumes:
       - postgres_replica_data:/var/lib/postgresql/data
-      - ./infra/pg-init.sql:/docker-entrypoint-initdb.d/01-init.sql
     networks:
       - mesh_net
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        until pg_isready -h postgres-primary -p 5432 -U agro -d agrosense; do
+          echo "[Replica] Aguardando postgres-primary ficar pronto..."
+          sleep 1
+        done
+        if [ ! -s /var/lib/postgresql/data/PG_VERSION ]; then
+          echo "[Replica] Diretório vazio. Clonando Primary via pg_basebackup com streaming replication..."
+          rm -rf /var/lib/postgresql/data/*
+          PGPASSWORD=agro123 pg_basebackup -h postgres-primary -p 5432 -U agro -D /var/lib/postgresql/data -Fp -Xs -R
+          chown -R postgres:postgres /var/lib/postgresql/data
+          chmod 700 /var/lib/postgresql/data
+          echo "[Replica] Clone concluído com sucesso."
+        fi
+        echo "[Replica] Iniciando PostgreSQL Replica em modo Standby..."
+        exec su-exec postgres postgres -D /var/lib/postgresql/data -c hot_standby=on
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U agro -d agrosense"]
-      interval: 10s
+      interval: 5s
       timeout: 5s
       retries: 10
 
@@ -121,7 +153,7 @@ services:
       DB_PASSWORD:  "agro123"
       WEB_URL:      "http://web:3000"
     ports:
-      - "9001:9001"  # Porta de eleição TCP
+      - "9001:9001"  # Porta de eleição TCP Bully
     networks:
       - mesh_net
       - election_net
@@ -149,7 +181,7 @@ services:
       DB_PASSWORD:  "agro123"
       WEB_URL:      "http://web:3000"
     ports:
-      - "9002:9002"  # Porta de eleição TCP
+      - "9002:9002"  # Porta de eleição TCP Bully
     networks:
       - mesh_net
       - election_net
@@ -177,7 +209,7 @@ services:
       DB_PASSWORD:  "agro123"
       WEB_URL:      "http://web:3000"
     ports:
-      - "9003:9003"  # Porta de eleição TCP
+      - "9003:9003"  # Porta de eleição TCP Bully
     networks:
       - mesh_net
       - election_net
@@ -203,7 +235,7 @@ services:
       - gateway
     restart: unless-stopped
 
-  # ── 9. Dashboard Web ────────────────────────────────────────────────────
+  # ── 9. Dashboard Web (Fastify + WS) ─────────────────────────────────────
   web:
     build:
       context: ./web
@@ -224,3 +256,4 @@ services:
       postgres-replica:
         condition: service_healthy
     restart: unless-stopped
+

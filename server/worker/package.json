@@ -1,4 +1,4 @@
-﻿{
+{
   "name": "agrosense-worker",
   "version": "1.0.0",
   "description": "AgroSense Mesh – Worker Node (Consumer + Lamport + Election)",
@@ -6,7 +6,8 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "ts-node src/index.ts"
+    "dev": "ts-node src/index.ts",
+    "test": "node --test dist/__tests__/*.test.js"
   },
   "dependencies": {
     "amqplib": "^0.10.4",
